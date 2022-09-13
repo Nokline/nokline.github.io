@@ -136,7 +136,7 @@
   <li>This immediately got me thinking that there is some sort of pattern for cache or no cache, instead of hardcoded files that get cached</li>
   <li>Then I moved onto the path. I tried <code class="language-plaintext highlighter-rouge">https://www.glassdoor.com/Award/somerandomfile</code>, and noticed it gave me the same 404 page with the same cache headers.</li>
   <li>I was pretty confident by then I figured out what the rule was, but tested just in case <code class="language-plaintext highlighter-rouge">https://www.glassdoor.com/randompath/somerandomfile</code>, which gave me a 404 but didn’t cache</li>
-  <li>So now it was same to assume that the rule was <code class="language-plaintext highlighter-rouge">/Award/*</code>, meaning everything under the <code class="language-plaintext highlighter-rouge">/Award</code> path was getting cached</li>
+  <li>So now it was safe to assume that the rule was <code class="language-plaintext highlighter-rouge">/Award/*</code>, meaning everything under the <code class="language-plaintext highlighter-rouge">/Award</code> path was getting cached</li>
   <li>For a while, I desperately tried to find some sort of header XSS to get Web Cache Poisoning, but unfortunately I ended up empty handed. However, this finding was still pretty great for me. While by itself it is not a vulnerability, it was a very relaxed rule and had a lot of potential to be chained with a vulnerability</li>
 </ul>
 
