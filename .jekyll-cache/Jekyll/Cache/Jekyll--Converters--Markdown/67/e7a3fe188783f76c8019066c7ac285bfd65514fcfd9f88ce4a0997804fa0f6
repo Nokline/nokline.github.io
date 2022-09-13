@@ -1,0 +1,179 @@
+I"�l<h4 id="here-is-how-i-was-able-to-poison-the-cache-of-thousands-of-pages-in-glassdoor-with-reflected--stored-xss">Here is how I was able to poison the cache of thousands of pages in Glassdoor with reflected &amp; stored XSS</h4>
+<p><br /></p>
+<center>
+<img src="/images/thumbnail.png" width="50%" height="40%" />
+</center>
+<p><br /></p>
+<h2 id="introduction">Introduction</h2>
+
+<p>Imagine you just picked up a new attractive bug bounty program your friend recommended, and you get excited to try it out because of all the good stories you’ve heard, but after a few days of intensive recon and research, you are left empty handed and end the day with no findings. The next day you start to doubt yourself, so you start looking for P4s and P5s, when all of the sudden, you find a header XSS. Seems pretty lame, until you remembered that your target has a caching server! You try to find a way to cache the XSS to store it, but keep getting stuck on MISS. Looks like they have web cache poisoning protection on this endpoint, making it un-cacheable, so you’re out of luck. Just when you thought you had a P2 or P1, reality HITS you like James Kettle’s web cache poisoning payloads. This seems like a dead end, so what do you do now? Have you maybe tried URL parsing confusions?</p>
+
+<h2 id="tldr">TL;DR</h2>
+
+<ol>
+  <li>For any page under the path https://www.glassdoor.com/Job/?xss all URL parameters are reflected within a Javascript script tag. Lack  of sanitization means we can inject &lt;/script into the page with https://www.glassdoor.com/Job/?xss=&lt;/script, however due to the WAF we cannot simply escape the script tags and execute our own</li>
+  <li>The optimizelyEndUserId cookie value is reflected in the page, right after the URL parameters. By combining this with the issue from step 1. we can bypass the WAF by splitting the payload into two parts to execute arbitrary javascript. However this is a self XSS, because we cannot force our victim to send custom cookies.</li>
+  <li>We can get past this via cache poisoning. Sadly the pages under https://www.glassdoor.com/Job were not being cached, but all the pages under https://www.glassdoor.com/Award/ were.</li>
+  <li>After some testing I found that path traversal characters <code class="language-plaintext highlighter-rouge">/../</code>, also known as dot segments, were being normalized by the caching frontend server but not being normalized by the backend web application (Dissagreement of <a href="https://www.rfc-editor.org/rfc/rfc3986#section-5.2.4">RFC 3986 5.2.4</a>). This means for the path https://www.glassdoor.com/Job/../Award/blah?xss=&lt;/script it would be seen as https://www.glassdoor.com/Award/blah?xss=&lt;/script by the caching server and cached, but the contents for https://www.glassdoor.com/Job/../Award/blah would be returned by the webserver due to lack of normalization</li>
+  <li>As a result, by sending the request with our payload to https://www.glassdoor.com/Job/../Award/blah?xss=&lt;/script (and rest of the payload in the cookie) we can succeed in obtaining our XSS. The webserver would interpret it as a page under https://www.glassdoor.com/Job/ and the return the contents with our injected XSS payload, while the caching server would see interpret it as https://www.glassdoor.com/Award/blah?xss=&lt;/script causing the response to be cached</li>
+  <li>By then visiting https://www.glassdoor.com/Award/blah?xss=&lt;/script our XSS will fire</li>
+  <li>Achieving a stored XSS was also possible using https://glassdoor.com/mz-survey/interview/collectQuestions_input.htm, which behaved very similarly to <code class="language-plaintext highlighter-rouge">/Job</code>, but the XSS was all in the headers and cookies, so sending a parameter in the URL was not necessary.</li>
+  <li>Sending https://www.glassdoor.com/mz-survey/interview/collectQuestions_input.htm/../../../Award/blah with the XSS in the headers and cookies will result in a stored xss under https://www.glassdoor.com/Award/blah</li>
+</ol>
+
+<p>Stored XSS PoC</p>
+
+<video width="100%" height="100%" controls="controls" name="Glassdoor Web Cache Poisoning Stored XSS">
+
+<source src="/videos/gd_wcp_stored.mov" />
+</video>
+
+<h2 id="my-xss-methodology">My XSS methodology</h2>
+<ul>
+  <li>When testing for XSS, it’s important to consider all types of exploitations, and take note of everything that looks interesting.</li>
+  <li>Even if something might not be exploitable now, try to see the potential it will have in a chained exploit.</li>
+  <li>Many times, exploit chains are made up of unexploitable links that by themselves are useless, but when chained together can be fatal.</li>
+  <li>In Glassdoor, I found such endpoint in <code class="language-plaintext highlighter-rouge">/Job/new-york-ny-compliance-officer-jobs-SRCH_IL.0,11_IC1132348_KO12,42069.htm</code></li>
+  <li>I found that the parameter name (and value too) were reflected in the response unsanitized</li>
+  <li>I was very suprised to see this, as this should have been caught very early on. The Glassdoor program has almost 800 submissions, so I didn’t make the mistake of thinking I was the only one who noticed it</li>
+  <li>The parameter was reflected in a string in a script tag, so to achieve an XSS, I had 2 options
+    <ol>
+      <li>Escape the string and inject javascript</li>
+      <li>Close the script tag and inject a generic XSS payload</li>
+    </ol>
+  </li>
+  <li>For the first option, the strings seemed to have been escaped with a backslash, and unfortunately bypassing this is hard.</li>
+  <li>My second option, however, had much more potential as none of the user input was sanitized, so injecting a closing script tag should do the trick</li>
+  <li>However, the moment I put <code class="language-plaintext highlighter-rouge">?&lt;/script&gt;</code> (URL decoded here for readability) my request got immediately swatted down and blocked by the WAF. This was very much expected, however I eat WAFs for breakfast &gt;:)</li>
+  <li>Before trying to play against the WAF, we have to understand the rules of the game.</li>
+  <li>A common mistake I see people make when trying to bypass WAFs, or just filters in general for the matter, is they copy and paste generic WAF bypass payloads without actually understanding <i>why</i> the WAF is blocking their requests. Spraying and praying WAFs is usually a waste of time from my experience, so it’s best to test them manually, and most importantly understand them</li>
+  <li>So my first step when bypassing WAFs is to start out with a blocked payload and remove a character by character until the WAF lets me pass</li>
+  <li>Luckily, it didn’t take us long to achieve an agreement with the WAF. All I had to do was remove the greater than <code class="language-plaintext highlighter-rouge">&gt;</code> sign and I got a 200.</li>
+  <li>So now the question is what else doesn’t it like? It seemed like any character after <code class="language-plaintext highlighter-rouge">&lt;/script</code> will get the attention of the WAF, like <code class="language-plaintext highlighter-rouge">&lt;/scriptaaa</code> for example</li>
+  <li>This would have been a big issue if the WAF truely blocked <code class="language-plaintext highlighter-rouge">&lt;/script*</code>, but luckily the WAF did allow whitespace characters such as <code class="language-plaintext highlighter-rouge">%20</code> (space), which means that eventually, the script tag will close by the next upcoming greater than <code class="language-plaintext highlighter-rouge">&gt;</code> sign</li>
+  <li>So now, the next step turns to finding a new unsanitized injection point that will allow us to close the script and inject an HTML XSS payload</li>
+  <li>I tried to see if I can break down the payload into pieces with other parameters, however it was blocked too. Seemed like the WAF rule applied to the entire URL, not individual parameters. Luckly, I have bypassed these types of WAFs before</li>
+  <li>My first goto technique was an alphanumeric based HTTP parameter pollution, which I’ve already used in the past to bypass a similar WAF in this very program.</li>
+  <li>An alphanumeric parameter pollution abuses the alphanumeric ordering of the reflected queries, so it is possible to bypass a WAF like this by breaking down your payload backwards into different parameters</li>
+  <li>Unfortunately, it didn’t seem like the case here, but I will release a writeup on how I was able to use this technique to achieve reflected XSS</li>
+  <li>At this point I was losing a bit of hope in this endpoint, so I decided to look for a chain link vulnerability instead of a stand-alone vulnerability. This is when I started to take a look at the cookies</li>
+  <li>This is when I noticed that next to the injection point, there was actually a value that came from the <code class="language-plaintext highlighter-rouge">optimizelyEndUserId</code> cookie in my request.</li>
+  <li>All I needed to do was to close the script tag and inject the HTML. Injecting  <code class="language-plaintext highlighter-rouge">&gt;&lt;svg&gt;</code> into the cookie seemed to do the trick.</li>
+  <li>Now I needed to actually execute javascript. We already got over the hard part, so now when we were able to smuggle in an svg tag past the WAF, so the rest should be easy</li>
+  <li>A pretty generic WAF bypass payload seemed to do the trick: <code class="language-plaintext highlighter-rouge">&gt;&lt;svg/onload=a=self['aler'%2B't']%3Ba(document.domain)&gt;</code></li>
+  <li>And now we got an XSS that looks like this:</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-javascript" data-lang="javascript"><span class="nx">GET</span> <span class="o">/</span><span class="nx">Job</span><span class="o">/</span><span class="k">new</span><span class="o">-</span><span class="nx">york</span><span class="o">-</span><span class="nx">ny</span><span class="o">-</span><span class="nx">compliance</span><span class="o">-</span><span class="nx">officer</span><span class="o">-</span><span class="nx">jobs</span><span class="o">-</span><span class="nx">SRCH_IL</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">11</span><span class="nx">_IC1132348_KO12</span><span class="p">,</span><span class="mi">42069</span><span class="p">.</span><span class="nx">htm</span><span class="p">?</span><span class="nx">attack</span><span class="o">=</span><span class="nx">VULN</span><span class="o">%</span><span class="mi">3</span><span class="nx">C</span><span class="o">/</span><span class="nx">script</span><span class="o">%</span><span class="mi">20</span> <span class="nx">HTTP</span><span class="o">/</span><span class="mi">2</span>
+<span class="nx">Host</span><span class="p">:</span> <span class="nx">www</span><span class="p">.</span><span class="nx">glassdoor</span><span class="p">.</span><span class="nx">com</span>
+<span class="nx">Cookie</span><span class="p">:</span> <span class="nx">optimizelyEndUserId</span><span class="o">=</span><span class="nx">BRUH</span><span class="o">&gt;&lt;</span><span class="nx">svg</span><span class="o">/</span><span class="nx">onload</span><span class="o">=</span><span class="nx">a</span><span class="o">=</span><span class="nb">self</span><span class="p">[</span><span class="dl">'</span><span class="s1">aler</span><span class="dl">'</span><span class="o">%</span><span class="mi">2</span><span class="nx">B</span><span class="dl">'</span><span class="s1">t</span><span class="dl">'</span><span class="p">]</span><span class="o">%</span><span class="mi">3</span><span class="nx">Ba</span><span class="p">(</span><span class="nb">document</span><span class="p">.</span><span class="nx">domain</span><span class="p">)</span><span class="o">&gt;</span>
+<span class="nx">User</span><span class="o">-</span><span class="nx">Agent</span><span class="p">:</span> <span class="nx">Mozilla</span><span class="o">/</span><span class="mf">5.0</span> <span class="p">(</span><span class="nx">X11</span><span class="p">;</span> <span class="nx">Linux</span> <span class="nx">x86_64</span><span class="p">;</span> <span class="nl">rv</span><span class="p">:</span><span class="mf">78.0</span><span class="p">)</span> <span class="nx">Gecko</span><span class="o">/</span><span class="mi">20100101</span> <span class="nx">Firefox</span><span class="o">/</span><span class="mf">78.0</span>
+<span class="nx">Content</span><span class="o">-</span><span class="nx">Length</span><span class="p">:</span> <span class="mi">0</span></code></pre></figure>
+
+<ul>
+  <li>However it is a self XSS that only exists if we have control over the cookies</li>
+  <li>This could escalated to reflected XSS with cache poisoning however, so thats what I started to look for next (I know I said stored XSS in the description, I promise we will get there soon!)</li>
+</ul>
+
+<h2 id="the-caching-methodology-for-finding-relaxed-rules">The caching methodology for finding relaxed rules</h2>
+<ul>
+  <li>When doing my initial recon, I always like testing the cache to see how it behaves.</li>
+  <li>If I see a path that gets cached, I always try to test it’s limit. Many websites have unique rules to how they cache specific paths and files, so manually testing for these rules is a great way to get familiar with the cache server</li>
+  <li>When I first go about manually testing for these caching rules, I usually try to mess with the extensions first. I will remove, add, or change the extension and always carefully observe the caching headers and content of the response</li>
+  <li>After I mess around with the extension, I will test the path itself</li>
+  <li>For example, in Glassdoor I noticed that <code class="language-plaintext highlighter-rouge">https://www.glassdoor.com/Award/new-york-ny-compliance-officer-jobs-SRCH_IL.0,11_IC1132348_KO12,42069.htm</code> was getting cached</li>
+  <li>I intercepted the request and sent it to the Burp repeater for further inspection</li>
+  <li>When I changed the extension, I noticed that while I get a 404 page, I still got MISS/HIT cache headers.</li>
+  <li>This immediately got me thinking that there is some sort of pattern for cache or no cache, instead of hardcoded files that get cached</li>
+  <li>Then I moved onto the path. I tried <code class="language-plaintext highlighter-rouge">https://www.glassdoor.com/Award/somerandomfile</code>, and noticed it gave me the same 404 page with the same cache headers.</li>
+  <li>I was pretty confident by then I figured out what the rule was, but tested just in case <code class="language-plaintext highlighter-rouge">https://www.glassdoor.com/randompath/somerandomfile</code>, which gave me a 404 but didn’t cache</li>
+  <li>So now it was same to assume that the rule was <code class="language-plaintext highlighter-rouge">/Award/*</code>, meaning everything under the <code class="language-plaintext highlighter-rouge">/Award</code> path was getting cached</li>
+  <li>For a while, I desperately tried to find some sort of header XSS to get Web Cache Poisoning, but unfortunately I ended up empty handed. However, this finding was still pretty great for me. While by itself it is not a vulnerability, it was a very relaxed rule and had a lot of potential to be chained with a vulnerability</li>
+</ul>
+
+<h2 id="chaining-the-exploit">Chaining the exploit</h2>
+<ul>
+  <li>Web Cache Poisoning can be used for many things. The first ones that come to mind are
+1) Stored XSS
+2) Escalation of unexploitable XSS to Reflected XSS
+3) DoS</li>
+  <li>At the time of my cache rule finding, I was already aware of the unexploitable XSS in <code class="language-plaintext highlighter-rouge">/Job/new-york-ny-compliance-officer-jobs-SRCH_IL.0,11_IC1132348_KO12,42069.htm?VULN%3C/script%20</code>, so trying to chain the two bugs into a reflected XSS vulnerability felt like the natrual thing to do</li>
+  <li>I went back to the Job path to do a bit more research. I wanted to see if there were any other endpoints that were vulnerable to the self XSS, and there were.</li>
+  <li>I found that every page under the Job path was vulnerable to self XSS, which was great! I took it a step further, and noticed that even pages that were <i>supposed</i> to be 404s, actually returned 200 and were too vulnerable to the self XSS.</li>
+  <li>So to recap the important information:
+    <ol>
+      <li>The CDN has a rule that will cache <code class="language-plaintext highlighter-rouge">/Award/*</code></li>
+      <li>There is a self XSS vulnerability on <code class="language-plaintext highlighter-rouge">/Job/*</code></li>
+    </ol>
+  </li>
+  <li>The attack surface of these two bugs were not “static”, but relied on a very relaxed wildcard pattern, which got me thinking: “Will these patterns <i>really</i> accept anything? Will the server prioritize the pattern over special URL syntax, such as a dot segment <code class="language-plaintext highlighter-rouge">/../</code>, or will it normalize the URL and <i>then</i> match the pattern?”</li>
+  <li>Or in other words: “Will both the backend server and frontend server’s URL parsers normalize the dot segments?”</li>
+  <li>To test this, I tried these two payload with the assumption that the URL parser normalized the dot segments:
+    <ol>
+      <li><code class="language-plaintext highlighter-rouge">/Award/../this_should_not_cache</code></li>
+      <li><code class="language-plaintext highlighter-rouge">/Job/../this_should_give_a_404</code></li>
+    </ol>
+  </li>
+  <li>And to my suprise, they yielded conflicting results</li>
+  <li>The Award payload was NOT cached, meaning the frontend server’s URL parser does normalize the dot segment before matching with the cache rule</li>
+  <li>The Job path, however, returned a 200, which means that the web server did NOT normalize the dot segment.</li>
+  <li>So to conclude this short test, we can say that the frontend server and the backend server have a disagreement over how a dot segment should be parsed</li>
+  <li>Knowing this, we can construct the following payload:</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-javascript" data-lang="javascript"><span class="nx">GET</span> <span class="o">/</span><span class="nx">Job</span><span class="o">/</span><span class="p">..</span><span class="o">/</span><span class="nx">Award</span><span class="o">/</span><span class="nx">RANDOMPATHTATDOESNOTEXIST</span><span class="p">?</span><span class="nx">cachebuster</span><span class="o">=</span><span class="mi">046</span><span class="o">&amp;</span><span class="nx">attack</span><span class="o">=</span><span class="nx">VULN</span><span class="o">%</span><span class="mi">3</span><span class="nx">C</span><span class="o">/</span><span class="nx">script</span><span class="o">%</span><span class="mi">20</span> <span class="nx">HTTP</span><span class="o">/</span><span class="mi">2</span>
+<span class="nx">Host</span><span class="p">:</span> <span class="nx">www</span><span class="p">.</span><span class="nx">glassdoor</span><span class="p">.</span><span class="nx">com</span>
+<span class="nx">Cookie</span><span class="p">:</span> <span class="nx">optimizelyEndUserId</span><span class="o">=</span><span class="nx">BRUH</span><span class="o">&gt;&lt;</span><span class="nx">svg</span><span class="o">/</span><span class="nx">onload</span><span class="o">=</span><span class="nx">a</span><span class="o">=</span><span class="nb">self</span><span class="p">[</span><span class="dl">'</span><span class="s1">aler</span><span class="dl">'</span><span class="o">%</span><span class="mi">2</span><span class="nx">B</span><span class="dl">'</span><span class="s1">t</span><span class="dl">'</span><span class="p">]</span><span class="o">%</span><span class="mi">3</span><span class="nx">Ba</span><span class="p">(</span><span class="nb">document</span><span class="p">.</span><span class="nx">domain</span><span class="p">)</span><span class="o">&gt;</span>
+<span class="nx">User</span><span class="o">-</span><span class="nx">Agent</span><span class="p">:</span> <span class="nx">Mozilla</span><span class="o">/</span><span class="mf">5.0</span> <span class="p">(</span><span class="nx">X11</span><span class="p">;</span> <span class="nx">Linux</span> <span class="nx">x86_64</span><span class="p">;</span> <span class="nl">rv</span><span class="p">:</span><span class="mf">78.0</span><span class="p">)</span> <span class="nx">Gecko</span><span class="o">/</span><span class="mi">20100101</span> <span class="nx">Firefox</span><span class="o">/</span><span class="mf">78.0</span>
+<span class="nx">Content</span><span class="o">-</span><span class="nx">Length</span><span class="p">:</span> <span class="mi">0</span></code></pre></figure>
+
+<ul>
+  <li>Since the webserver will NOT normalize the dot segment, we will get the response with the XSS</li>
+  <li>But, because the frontend WILL normalize the dot segment, it will be cached (and stored) under <code class="language-plaintext highlighter-rouge">/Award/RANDOMPATHTATDOESNOTEXIST?cachebuster=046&amp;attack=VULN%3C/script%20</code></li>
+  <li>So now, when the victim will visit <code class="language-plaintext highlighter-rouge">https://glassdoor.com/Award/RANDOMPATHTATDOESNOTEXIST?cachebuster=046&amp;attack=VULN%3C/script%20</code>, they will get the stored response with the XSS from the CDN</li>
+</ul>
+
+<h2 id="stored-xss">Stored XSS</h2>
+<ul>
+  <li>So once I was able to get a working PoC of my reflected XSS, I immediately reported.</li>
+  <li>However, I was still not satisfied enough, because I knew that a stored XSS should have been possible under the right conditions</li>
+  <li>so I kept on looking for an XSS that was truely all header based, and behaved similarly to <code class="language-plaintext highlighter-rouge">/Job/*</code>, where an XSS was possible under every page under it.</li>
+  <li>Thats when I remembered my first report to glassdoor, a reflected XSS in http://glassdoor.com/mz-survey/start_input.htm via an alphanumeric ordered parameter pollution (at the time it was still in triage, so it wasn’t fixed).</li>
+  <li>I thought that maybe I will be able to find a header XSS there too, so I kept on looking</li>
+  <li>Luckily for me, my reflected XSS from the report was also vulnerable to a full header XSS! But it did not behave like <code class="language-plaintext highlighter-rouge">/Job/*</code> where every page under it was vulnerable, so it was pretty much useless</li>
+  <li>I did remember that it was not only one endpoint which was vulnerable, there were quite a few others</li>
+  <li>Luckily, I was eventually able to find an endpoint that was both vulnerable to header XSS AND behaved like <code class="language-plaintext highlighter-rouge">/Job/*</code> after testing each of the vulnerable endpoints I previously reported and got to this one: https://glassdoor.com/mz-survey/interview/collectQuestions_input.htm/</li>
+  <li>The payload looked something like this</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-javascript" data-lang="javascript"><span class="nx">GET</span> <span class="o">/</span><span class="nx">mz</span><span class="o">-</span><span class="nx">survey</span><span class="o">/</span><span class="nx">interview</span><span class="o">/</span><span class="nx">collectQuestions_input</span><span class="p">.</span><span class="nx">htm</span><span class="o">/</span><span class="p">..</span><span class="o">/</span><span class="p">..</span><span class="o">/</span><span class="p">..</span><span class="o">/</span><span class="nx">Award</span><span class="o">/</span><span class="nx">RANDOMPATHTATDOESNOTEXIST123</span><span class="p">?</span><span class="nx">cachebuster</span><span class="o">=</span><span class="mi">050</span> <span class="nx">HTTP</span><span class="o">/</span><span class="mi">2</span>
+<span class="nx">Host</span><span class="p">:</span> <span class="nx">www</span><span class="p">.</span><span class="nx">glassdoor</span><span class="p">.</span><span class="nx">com</span>
+<span class="nx">X</span><span class="o">-</span><span class="nx">Forwarded</span><span class="o">-</span><span class="nx">For</span><span class="p">:</span> <span class="nx">VULN</span>
+<span class="nx">X</span><span class="o">-</span><span class="nx">Forwarded</span><span class="o">-</span><span class="nx">For</span><span class="p">:</span> <span class="nx">VULN</span><span class="o">&gt;&lt;</span><span class="nx">svg</span><span class="o">/</span><span class="nx">onload</span><span class="o">=</span><span class="nb">self</span><span class="p">[</span><span class="s2">`alert`</span><span class="p">](</span><span class="nb">document</span><span class="p">.</span><span class="nx">domain</span><span class="p">)</span><span class="o">&gt;</span>
+<span class="nx">Cookie</span><span class="p">:</span> <span class="nx">gdId</span><span class="o">=</span><span class="nx">VULN</span><span class="o">%</span><span class="mi">22</span><span class="o">&lt;</span><span class="sr">/script%2</span><span class="err">0
+</span><span class="nx">User</span><span class="o">-</span><span class="nx">Agent</span><span class="p">:</span> <span class="nx">Mozilla</span><span class="o">/</span><span class="mf">5.0</span> <span class="p">(</span><span class="nx">X11</span><span class="p">;</span> <span class="nx">Linux</span> <span class="nx">x86_64</span><span class="p">;</span> <span class="nl">rv</span><span class="p">:</span><span class="mf">78.0</span><span class="p">)</span> <span class="nx">Gecko</span><span class="o">/</span><span class="mi">20100101</span> <span class="nx">Firefox</span><span class="o">/</span><span class="mf">78.0</span>
+<span class="nx">Accept</span><span class="p">:</span> <span class="nx">text</span><span class="o">/</span><span class="nx">html</span><span class="p">,</span><span class="nx">application</span><span class="o">/</span><span class="nx">xhtml</span><span class="o">+</span><span class="nx">xml</span><span class="p">,</span><span class="nx">application</span><span class="o">/</span><span class="nx">xml</span><span class="p">;</span><span class="nx">q</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span><span class="nx">image</span><span class="o">/</span><span class="nx">webp</span><span class="p">,</span><span class="o">*</span><span class="cm">/*;q=0.8</span></code></pre></figure>
+
+<ul>
+  <li>The reason for splitting the XSS payload into 2 headers and a cookie is to bypass the WAF, as I was not able to put the entire payload into one cookie or header</li>
+  <li>The X-Forwarded-For header is reflected after the cookie, so my opprotunity to continue my payload lied there.</li>
+  <li>Unfortunately, the WAF was even stricter for the X-Forwarded-For header, as I was not able to use ANY special characters whatsoever</li>
+  <li>
+    <p>Interestingly enough, there was another cool header confusion where the WAF only blocked the first X-Forwarded-For header, but the webserver interpreted both and reflected both. This allowed me to easily bypass the WAF by giving a valid value for the first X-Forwarded-For header but the rest of my XSS payload in the second X-Forwarded-For header. This can be seen in the above payload</p>
+  </li>
+  <li>Due to the tricky nature of the bug, the triage process was a little more complicated than usual. Big thanks to <a href="https://twitter.com/bxmbn">@bxmbn</a> (AKA <a href="https://hackerone.com/bombon?type=user">bombon</a> on h1)) for giving me some help in the triage process</li>
+</ul>
+
+<script>
+  document
+    .querySelector('.post-content') // your selector for the post body
+    .querySelectorAll('h1,h2,h3,h4,h5,h6')
+    .forEach(function(heading) {
+      if (heading.id) {
+        heading.innerHTML =
+          '<a style="color:black;" href="#' + heading.id + '">' + heading.innerText + '<\/a>';
+      }
+    });
+</script>
+
+:ET
