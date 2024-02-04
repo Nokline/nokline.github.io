@@ -15,6 +15,8 @@ categories: BugBounty
 
 ## Intro 
 
+Here's how I was able to take your account in ChatGPT.
+
 Last year Nagli discovered a web cache deception vulnerability in ChatGPT. The impact of this was critical, as it lead to the leak of user's auth tokens and subsequently, an account takeover. OpenAI notified users of ChatGPT of this vulnerability, and quickly patched the bug... Or did they?
 
 In this writeup, I will explain how I was able to abuse a path traversal URL parser confusion to achieve what I like to call a "wildcard" cache deception vulnerability, in order to steal user's auth tokens and take over their accounts. I will make the assumption that readers know the basics of the web cache deception vulnerability, as I will not go into too much depth explaining it. If you are not already familiar with this awesome vulnerability yet, or would like a refresher, I highly reccomend to check out [Nagli's writeup](https://www.shockwave.cloud/blog/shockwave-works-with-openai-to-fix-critical-chatgpt-vulnerability) first and come back to this one. Additionally, this bug uses a similar concept to the web cache poisoning vulnerability I found in [Glassdoor](https://nokline.github.io/bugbounty/2022/09/02/Glassdoor-Cache-Poisoning.html) last year, which allows us to cache "un-cacheable" files and endpoints. While it is not exactly the same technique, it demonstrates how much potential there is for URL parser confusions, specifically with path traversals, to open new doors for all sorts of cache vulnerabilities.
