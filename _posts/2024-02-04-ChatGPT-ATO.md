@@ -15,7 +15,7 @@ categories: BugBounty
 
 ## Intro 
 
-Here's how I was able to take your account in ChatGPT.
+Here's how I was able to take over your account in ChatGPT.
 
 Last year Nagli discovered a web cache deception vulnerability in ChatGPT. The impact of this was critical, as it lead to the leak of user's auth tokens and subsequently, an account takeover. OpenAI notified users of ChatGPT of this vulnerability, and quickly patched the bug... Or did they?
 
