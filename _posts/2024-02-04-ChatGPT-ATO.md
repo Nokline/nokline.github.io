@@ -36,7 +36,7 @@ Which means that pretty much anything under the `/share/` path gets cached. This
 
 ## Path Traversal Confusion
 
-In a website that uses caching, the request must go through the CDN  before it gets the the web server. This means that the URL gets parsed twice, which makes it possible for a URL parser confusion. In ChatGPT's case, a URL parser confusion meant that the two servers parse URL encoded forward slashes differently, where Cloudflare's CDN did NOT decode and did NOT normalize a URL encoded path traversal, but the web server did. So a URL encoded path traversal allows an attacker to cache any file they wish from the server, including the highest impact API endpoints which contain authorization tokens.
+In a website that uses caching, the request must go through the CDN  before it gets to the web server. This means that the URL gets parsed twice, which makes it possible for a URL parser confusion. In ChatGPT's case, a URL parser confusion meant that the two servers parse URL encoded forward slashes differently, where Cloudflare's CDN did NOT decode and did NOT normalize a URL encoded path traversal, but the web server did. So a URL encoded path traversal allows an attacker to cache any file they wish from the server, including the highest impact API endpoints which contain authorization tokens.
 This sounds a bit confusing, so here is an example payload:
 Note that the `%2F` decodes to `/` and `/api/auth/session` is a sensitive API endpoint which contains the user's auth token
 `https://chat.openai.com/share/%2F..%2Fapi/auth/session?cachebuster=123`
