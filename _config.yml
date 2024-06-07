@@ -22,7 +22,7 @@ title: Harel Security Research
 description: >- # this means to ignore newlines until "baseurl:"
   Here you can read all about my research and techniques I've gathered over time!
 baseurl: "" # the subpath of your site, e.g. /blog
-url: https://my-site.github.io # the base hostname & protocol for your site, e.g. http://example.com
+url: https://nokline.github.io # the base hostname & protocol for your site, e.g. http://example.com
 domain: nokline.github.io 
 twitter_username: h4r3l
 github_username:  nokline
